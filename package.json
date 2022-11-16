@@ -1,0 +1,21 @@
+{
+  "name": "token",
+  "version": "1.0.0",
+  "description": "token service for the corespace api",
+  "main": "service.js",
+  "author": "AsP3X",
+  "license": "MIT",
+  "private": false,
+  "scripts": {
+    "dev": "nodemon service.js",
+    "start": "node service.js production"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.20"
+  },
+  "dependencies": {
+    "dotenv": "^16.0.3",
+    "express": "^4.18.2",
+    "jsonwebtoken": "^8.5.1"
+  }
+}
