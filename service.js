@@ -1,11 +1,13 @@
 const express = require('express');
 const dotenv = require('dotenv');
 const path = require('path');
-const fs = require('fs');
+const cors = require('cors');
 
 // Loading custom modules
 const getAllRoutes = require('./assets/utils/getAllRoutes');
 const Logger = require('./assets/utils/logger');
+const allowedHeader = require('./assets/networking/allowedHeader');
+const fingerprintMiddleware = require('./assets/middleware/mdFingerprint');
 
 // Create the logger
 const logger = new Logger("token");
@@ -22,8 +24,19 @@ const args = process.argv.slice(2);
 // Load configuration
 const PORT = process.env.PORT || 3000;
 const ROUTES_PATH = path.join(__dirname, `routes`);
-let RunMode = 'dev';
+const allowDebug = process.env.ALLOW_DEBUG || false;
 
+logger.info(allowDebug)
+
+// #############################################################################
+// ##################          Running Checks ############################
+// #############################################################################
+if (allowDebug || allowDebug === true) { 
+  logger.info("Debug mode enabled, skipping forbidden source check"); 
+} else {
+  logger.info("Debug mode disabled, checking forbidden source");
+}
+// -;-
 
 // #############################################################################
 // ##################          Load all Middlewares ############################
@@ -34,18 +47,12 @@ service.use(express.json());
 service.use(express.urlencoded({ extended: true }));
 
 // setting allowed headers
-service.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', process.env.ALLOWED_ORIGINS);
-  res.header('Access-Control-Allow-Headers', process.env.ALLOWED_HEADERS);
-  res.header('Access-Control-Allow-Methods', process.env.ALLOWED_METHODS_X);
+service.use(cors(allowedHeader));
 
-  if (req.method === 'OPTIONS') {
-    res.header('Access-Control-Allow-Methods', process.env.ALLOWED_METHODS);
-    return res.status(200).json({});
-  }
+service.use(fingerprintMiddleware);
 
-  next();
-});
+// Supress the X-Powered-By header
+service.disable('x-powered-by');
 // -;-
 
 // #############################################################################
@@ -58,7 +65,6 @@ service.use((req, res, next) => {
   logger.request(reqMessage);
   next();
 });
-
 // -;-
 
 // #############################################################################
@@ -70,11 +76,39 @@ const apiRouteKeys = Object.keys(apiRoutes)
 logger.info(`Found ${apiRouteKeys.length} routes`);
 logger.log("Beginnig to load routes...");
 
+// check if the request originates from a forbidden source
+service.use((req, res, next) => {
+  const userAgent = req.headers['user-agent'];
+
+  if (allowDebug || allowDebug === true) { next(); return; }
+  if (userAgent.includes('curl') || userAgent.includes('PostmanRuntime') || userAgent.includes('insomnia')) {
+    logger.warn("Forbidden source detected, aborting request");
+    res.status(403).json({
+      error: "Forbidden",
+      message: "You are not allowed to access this resource",
+      status: 403
+    });
+    return;
+  } else {
+    next();
+  }
+});
+
 apiRoutes.forEach(route => {
+  logger.log(`Loading route: ${route}`);
+
   const routePath = path.join(ROUTES_PATH, route);
   const routeName = route.replace('.js', '');
+
+  // load route classes
   const routeHandler = require(routePath);
-  service.use(`/token/${routeName}`, routeHandler);
+  const routeInstance = new routeHandler();
+
+  // load route methods
+  routeInstance.load();
+
+  // add route to service
+  service.use(`/${routeName}`, routeInstance.router);
 });
 
 logger.success("Routes loading complete!");
