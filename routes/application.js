@@ -10,11 +10,24 @@ const { DBConnector } = require('../assets/database/DBManager');
 
 // Loading models
 const appTokenSchema = require('../assets/models/applicationToken');
+const userSchema = require('../assets/models/user');
 
 function generateHash(data) {
   const hash = crypto.createHash('sha512');
   hash.update(data);
   return hash.digest('hex');
+}
+
+async function checkUUID(uuid) {
+  // get the uuid of a user by username
+  const user = await userSchema.findOne({
+    _id: uuid
+  });
+
+  if (!user || user === null) {
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -50,6 +63,48 @@ class Application {
       });
   }
 
+  getTokenInfo() {
+    this.router.get("/get-info/:token", (req, res) => {
+      const { token } = req.params;
+      if (!token) { res.status(400).json({ error: "Missing token ID" }); return; }
+
+      appTokenSchema.findOne({ _id: token }, (error, token) => {
+        if (error) { res.status(500).json({ error: error }); return; }
+        
+        const result = {
+          owner: token.owner,
+          appname: token.appname,
+          expires: token.expires,
+          volume: token.volume,
+          active: token.active,
+          created: token.created
+        };
+
+        res.status(200).json({ result });
+      });
+    });
+  }
+
+  getTokensRoute() {
+    this.router.get("/get-tokens/:owner", (req, res) => {
+      const { owner } = req.params;
+      if (!owner) { res.status(400).json({ error: "Missing owner" }); return; }
+      if (!checkUUID(owner)) { res.status(400).json({ error: "Invalid owner" }); return; }
+
+      appTokenSchema.find({ owner: owner }, (error, tokens) => {
+        if (error) { res.status(500).json({ error: error }); return; }
+        
+        // only respond with the _id of the token
+        const tokenIDs = tokens.map((token) => {
+          return token._id;
+        });
+
+        res.status(200).json({ tokens: tokenIDs });
+
+      });
+    });
+  }
+
   rootRoute() {
     this.router.post("/", async (req, res) => {
       const {
@@ -59,6 +114,7 @@ class Application {
 
       if (!owner) { res.status(400).json({ error: "Missing owner" }); return;}
       if (!appname) { res.status(400).json({ error: "Missing appname" }); return;}
+      if (!await checkUUID(owner)) { res.status(400).json({ error: "Invalid owner" }); return; }
       if (await checkTokenNameTaken(owner, appname)) { res.status(400).json({ error: "Token name already taken" }); return; }
 
       const applicationToken = generateHash(`${owner}${appname}${Date.now()}`);
@@ -84,6 +140,8 @@ class Application {
   load() {
     this.dbConnection();
     this.rootRoute();
+    this.getTokenInfo();
+    this.getTokensRoute();
   }
 }
 
