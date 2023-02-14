@@ -1,51 +1,148 @@
+const mongoose = require('mongoose');
 const express = require('express');
+const crypto = require('crypto');
+const path = require('path');
+const fs = require('fs');
 
 // Loading custom modules
 const Logger = require('../assets/utils/logger');
-const { tokenGenerator } = require('../assets/token/generator');
-const { IdentGen } = require('../assets/token/generator');
-const { TokenVerifier } = require('../assets/token/generator');
+const { DBConnector } = require('../assets/database/DBManager');
 
-// Create the logger
-const logger = new Logger("token/application");
+// Loading models
+const appTokenSchema = require('../assets/models/applicationToken');
+const userSchema = require('../assets/models/user');
 
-// Importing router
-const router = express.Router();
+function generateHash(data) {
+  const hash = crypto.createHash('sha512');
+  hash.update(data);
+  return hash.digest('hex');
+}
 
-// Create the root product route
-router.get("/", (req, res) => {
-  res.send({
-    message: "Create a application token by sending a POST request to /application"
-  })
-});
+async function checkUUID(uuid) {
+  // get the uuid of a user by username
+  const user = await userSchema.findOne({
+    _id: uuid
+  });
 
-router.post("/", (req, res) => {
-  const { application } = req.body;
-  logger.info("Received request to create a application token");
+  if (!user || user === null) {
+    return false;
+  }
+  return true;
+}
 
-  if (!application) {
-    res.status(400).send({
-      message: "Missing application name"
-    });
-  } else {
-    const identGen = new IdentGen(application);
-    identGen.application();
-    const id = identGen.get();
+/**
+ * Checks if the token name is already taken of a given owner
+ * @param {String} owner 
+ * @param {String} appname 
+ */
+async function checkTokenNameTaken(owner, appname) {
+  const token = await appTokenSchema.findOne({ owner: owner, appname: appname });
+  if (!token || token === null) { return false; }
+  return true;
+}
 
-    const tkGen = new tokenGenerator(id);
-    tkGen.applicationToken();
+class Application {
+  constructor() {
+    this.logger = new Logger("token/application");
+    this.router = express.Router();
+    this.dbc = new DBConnector();
+  }
 
-    const token = tkGen.get();
+  dbConnection() {
+    // Starting connection to the database
+    this.dbc.createAUrl();
+    this.logger.log(`Starting connection to the database...`);
+    this.logger.log(`Database URL: ${this.dbc.url}`);
+    this.dbc.attemptConnection()
+      .then(() => {
+        this.logger.success("Database connection succeeded");
+      })
+      .catch((error) => {
+        this.logger.log("Database connection failed");
+        this.logger.error(error);
+      });
+  }
 
-    res.send({
-      message: "Application token created",
-      indentifier: token.id,
-      token: token.token,
-      expiresAt: token.expiresIn
+  getTokenInfo() {
+    this.router.get("/get-info/:token", (req, res) => {
+      const { token } = req.params;
+      if (!token) { res.status(400).json({ error: "Missing token ID" }); return; }
+
+      appTokenSchema.findOne({ _id: token }, (error, token) => {
+        if (error) { res.status(500).json({ error: error }); return; }
+        
+        const result = {
+          owner: token.owner,
+          appname: token.appname,
+          expires: token.expires,
+          volume: token.volume,
+          active: token.active,
+          created: token.created
+        };
+
+        res.status(200).json({ result });
+      });
     });
   }
-});
 
-logger.success("Loaded application route");
+  getTokensRoute() {
+    this.router.get("/get-tokens/:owner", (req, res) => {
+      const { owner } = req.params;
+      if (!owner) { res.status(400).json({ error: "Missing owner" }); return; }
+      if (!checkUUID(owner)) { res.status(400).json({ error: "Invalid owner" }); return; }
 
-module.exports = router;
+      appTokenSchema.find({ owner: owner }, (error, tokens) => {
+        if (error) { res.status(500).json({ error: error }); return; }
+        
+        // only respond with the _id of the token
+        const tokenIDs = tokens.map((token) => {
+          return token._id;
+        });
+
+        res.status(200).json({ tokens: tokenIDs });
+
+      });
+    });
+  }
+
+  rootRoute() {
+    this.router.post("/", async (req, res) => {
+      const {
+        owner,
+        appname
+      } = req.body;
+
+      if (!owner) { res.status(400).json({ error: "Missing owner" }); return;}
+      if (!appname) { res.status(400).json({ error: "Missing appname" }); return;}
+      if (!await checkUUID(owner)) { res.status(400).json({ error: "Invalid owner" }); return; }
+      if (await checkTokenNameTaken(owner, appname)) { res.status(400).json({ error: "Token name already taken" }); return; }
+
+      const applicationToken = generateHash(`${owner}${appname}${Date.now()}`);
+
+      const token = new appTokenSchema({
+        _id: new mongoose.Types.ObjectId(),
+        owner: owner,
+        appname: appname,
+        token: applicationToken
+      });
+
+      token.save().then((result) => {
+        res.status(200).json({ 
+          message: "Token created",
+          token: result
+         });
+      }).catch((error) => {
+        res.status(500).json({ error: error });
+      });
+    });
+  }
+
+  load() {
+    this.dbConnection();
+    this.rootRoute();
+    this.getTokenInfo();
+    this.getTokensRoute();
+  }
+}
+
+module.exports = Application;
