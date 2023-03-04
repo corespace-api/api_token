@@ -1,0 +1,8 @@
+{
+    "ALLOWED_AGENDS": [
+        "Mozilla",
+        "AppleWebKit",
+        "Chrome"
+    ],
+    "DEBUG": false
+}
