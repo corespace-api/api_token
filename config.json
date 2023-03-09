@@ -1,8 +1,17 @@
 {
-    "ALLOWED_AGENDS": [
-        "Mozilla",
-        "AppleWebKit",
-        "Chrome"
-    ],
-    "DEBUG": false
+  "name": "token",
+  "description": "API Token",
+  "version": "1.1.0",
+  "author": "AsP3X",
+  "license": "MIT",
+  "port": 3000,
+  "mongodb": {
+    "MONGO_URL": "localhost",
+    "MONGO_PORT": "27017",
+    "MONGO_USER": "corespace",
+    "MONGO_PASSWORD": "masterpassword",
+    "MONGO_DB": "corespace"
+  },
+  "domain": "http://localhost",
+  "route_path": "C:\\Users\\servi\\Desktop\\Development\\corespace_api_refactor\\api_token\\routes\\"
 }

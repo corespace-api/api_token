@@ -1,12 +1,5 @@
-const mongoose = require('mongoose');
-const express = require('express');
 const crypto = require('crypto');
-const path = require('path');
-const fs = require('fs');
-
-// Loading custom modules
-const Logger = require('../assets/utils/logger');
-const { DBConnector } = require('../assets/database/DBManager');
+const mongoose = require('mongoose');
 
 // Loading models
 const appTokenSchema = require('../assets/models/applicationToken');
@@ -42,29 +35,15 @@ async function checkTokenNameTaken(owner, appname) {
 }
 
 class Application {
-  constructor() {
-    this.logger = new Logger("token/application");
-    this.router = express.Router();
-    this.dbc = new DBConnector();
-  }
-
-  dbConnection() {
-    // Starting connection to the database
-    this.dbc.createAUrl();
-    this.logger.log(`Starting connection to the database...`);
-    this.logger.log(`Database URL: ${this.dbc.url}`);
-    this.dbc.attemptConnection()
-      .then(() => {
-        this.logger.success("Database connection succeeded");
-      })
-      .catch((error) => {
-        this.logger.log("Database connection failed");
-        this.logger.error(error);
-      });
+  constructor(config, logger, express) {
+    this.config = config;
+    this.logger = logger
+    this.express = express;
+    this.router = this.express.Router();
   }
 
   getTokenInfo() {
-    this.router.get("/get-info/:token", (req, res) => {
+    this.router.get("/info/:token", (req, res) => {
       const { token } = req.params;
       if (!token) { res.status(400).json({ error: "Missing token ID" }); return; }
 
@@ -85,28 +64,8 @@ class Application {
     });
   }
 
-  getTokensRoute() {
-    this.router.get("/get-tokens/:owner", (req, res) => {
-      const { owner } = req.params;
-      if (!owner) { res.status(400).json({ error: "Missing owner" }); return; }
-      if (!checkUUID(owner)) { res.status(400).json({ error: "Invalid owner" }); return; }
-
-      appTokenSchema.find({ owner: owner }, (error, tokens) => {
-        if (error) { res.status(500).json({ error: error }); return; }
-        
-        // only respond with the _id of the token
-        const tokenIDs = tokens.map((token) => {
-          return token._id;
-        });
-
-        res.status(200).json({ tokens: tokenIDs });
-
-      });
-    });
-  }
-
-  rootRoute() {
-    this.router.post("/", async (req, res) => {
+  createToken() {
+    this.router.post("/create/", async (req, res) => {
       const {
         owner,
         appname
@@ -137,11 +96,30 @@ class Application {
     });
   }
 
+  rootRoute() {
+    this.router.get("/", (req, res) => {
+      const { owner } = req.params;
+      if (!owner) { res.status(400).json({ error: "Missing owner" }); return; }
+      if (!checkUUID(owner)) { res.status(400).json({ error: "Invalid owner" }); return; }
+
+      appTokenSchema.find({ owner: owner }, (error, tokens) => {
+        if (error) { res.status(500).json({ error: error }); return; }
+        
+        // only respond with the _id of the token
+        const tokenIDs = tokens.map((token) => {
+          return token._id;
+        });
+
+        res.status(200).json({ tokens: tokenIDs });
+
+      });
+    });
+  }
+
   load() {
-    this.dbConnection();
-    this.rootRoute();
     this.getTokenInfo();
-    this.getTokensRoute();
+    this.createToken();
+    this.rootRoute();
   }
 }
 

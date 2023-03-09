@@ -1,129 +1,145 @@
-const express = require('express');
-const dotenv = require('dotenv');
-const path = require('path');
-const cors = require('cors');
+const ServiceManager = require('./assets/utils/serviceManager');
 
-// Loading custom modules
-const getAllRoutes = require('./assets/utils/getAllRoutes');
-const Logger = require('./assets/utils/logger');
-const allowedHeader = require('./assets/networking/allowedHeader');
-const fingerprintMiddleware = require('./assets/middleware/mdFingerprint');
-
-// Create the logger
-const logger = new Logger("token");
-
-logger.log("Booting up microservice...");
-
-// Load environment variables from .env file and creating the service
-const service = express();
-dotenv.config();
-
-// get run arguments
-const args = process.argv.slice(2);
-
-// Load configuration
-const PORT = process.env.PORT || 3000;
-const ROUTES_PATH = path.join(__dirname, `routes`);
-const allowDebug = process.env.ALLOW_DEBUG || false;
-
-logger.info(allowDebug)
-
-// #############################################################################
-// ##################          Running Checks ############################
-// #############################################################################
-if (allowDebug || allowDebug === true) { 
-  logger.info("Debug mode enabled, skipping forbidden source check"); 
-} else {
-  logger.info("Debug mode disabled, checking forbidden source");
-}
-// -;-
-
-// #############################################################################
-// ##################          Load all Middlewares ############################
-// #############################################################################
-logger.log("Loading middlewares...");
-// Add middleware to parse the body of the request
-service.use(express.json());
-service.use(express.urlencoded({ extended: true }));
-
-// setting allowed headers
-service.use(cors(allowedHeader));
-
-service.use(fingerprintMiddleware);
-
-// Supress the X-Powered-By header
-service.disable('x-powered-by');
-// -;-
-
-// #############################################################################
-// ##################       Service Request Log      ###########################
-// #############################################################################
-
-service.use((req, res, next) => {
-  headers = req.headers;
-  reqMessage = `Request: ${req.method} ${req.originalUrl} + ${JSON.stringify(headers)}`;
-  logger.request(reqMessage);
-  next();
-});
-// -;-
-
-// #############################################################################
-// ##################      Load all Routes     #################################
-// #############################################################################
-const apiRoutes = getAllRoutes(ROUTES_PATH);
-const apiRouteKeys = Object.keys(apiRoutes)
-
-logger.info(`Found ${apiRouteKeys.length} routes`);
-logger.log("Beginnig to load routes...");
-
-// check if the request originates from a forbidden source
-service.use((req, res, next) => {
-  const userAgent = req.headers['user-agent'];
-
-  if (allowDebug || allowDebug === true) { next(); return; }
-  if (userAgent.includes('curl') || userAgent.includes('PostmanRuntime') || userAgent.includes('insomnia')) {
-    logger.warn("Forbidden source detected, aborting request");
-    res.status(403).json({
-      error: "Forbidden",
-      message: "You are not allowed to access this resource",
-      status: 403
-    });
-    return;
-  } else {
-    next();
+class Token extends ServiceManager {
+  constructor(name) {
+    super(name);
+    this.fingerprintMiddleware = null;
+    this.cors = null;
+    this.routes = [];
   }
-});
 
-apiRoutes.forEach(route => {
-  logger.log(`Loading route: ${route}`);
+  gracefulShutdown() {
+    this.logger.log("Gracefully shutting down the service...");
+    this.serviceSchema.findOne({ uuid: this.config.getConfig("uuid") }).then((service) => {
+      if (!service) {
+        this.logger.warn("Service not found in database");
+        process.exit(1);
+      }
 
-  const routePath = path.join(ROUTES_PATH, route);
-  const routeName = route.replace('.js', '');
+      service.status = "await_removal";
+      service.command = "user_init_shutdown"
+      service.save().then(() => {
+        this.logger.success("Service status updated to 'await_removal'");
+        process.exit(0);
+      }).catch((error) => {
+        this.logger.error(error);
+        process.exit(1);
+      });
+    }).catch((error) => {
+      this.logger.error(error);
+      process.exit(1);
+    });
+  }
 
-  // load route classes
-  const routeHandler = require(routePath);
-  const routeInstance = new routeHandler();
+  loadDependencies() {
+    super.loadDependencies();
+    this.express = require('express');
+    this.server = this.express();
+    this.cors = require('cors');
+  }
 
-  // load route methods
-  routeInstance.load();
+  loadCustomDependencies() {
+    super.loadCustomDependencies();
+    this.fingerprintMiddleware = require('./assets/middleware/mdFingerprint');
+  }
 
-  // add route to service
-  service.use(`/${routeName}`, routeInstance.router);
-});
+  logRequests() {
+    this.server.use((req, res, next) => {
+      const headers = req.headers;
+      const reqMessage = `Request: ${req.method} ${req.originalUrl} + ${JSON.stringify(headers)}`;
+      this.logger.request(reqMessage);
+      next();
+    });
+  }
 
-logger.success("Routes loading complete!");
-// -;-
+  loadMiddleware() {
+    this.server.use(this.express.json());
+    this.server.use(this.express.urlencoded({ extended: true }));
+    this.server.use(this.cors());
+    this.server.use(this.fingerprintMiddleware);
+    this.server.disable('x-powered-by');
+  }
 
-service.use((error, req, res, next) => {
-  res.status(error.status || 500);
-  res.json({
-    error: {
-      message: error.message,
-      status: (error.status || 500)
+  catchRoot() {
+    this.server.get("/", (req, res) => {
+      res.status(200).json({
+        service: this.config.getConfig("name"),
+        uuid: this.config.getConfig("uuid"),
+        routes: this.routes
+      });
+    });
+  }
+
+  loadRoutes() {
+    if (!this.config.getConfig("route_path")) {
+      this.logger.error("Routes path not set")
+      process.exit(1);
     }
-  });
+
+    const apiRoutes = this.getAllRoutes(this.config.getConfig("route_path"));
+    const apiRouteKeys = Object.keys(apiRoutes);
+
+    this.logger.info(`Found ${apiRouteKeys.length} routes`);
+    this.logger.log("Beginnig to load routes...");
+
+    apiRoutes.forEach(route => {
+      this.logger.log(`Loading route: ${route}`);
+
+      const routePath = this.path.join(this.config.getConfig("route_path"), route);
+      const routeName = route.replace('.js', '');
+
+      const routeHandler = require(routePath);
+      const routeInstance = new routeHandler(this.config, this.logger, this.express, this.dbc);
+
+      routeInstance.load();
+
+      this.routes.push(`${this.config.getConfig("domain")}:${this.config.getConfig("port")}/${this.config.getConfig("name")}/${routeName}`);
+      this.server.use(`/${this.config.getConfig("name")}/${routeName}`, routeInstance.router);
+    });
+  }
+
+  init() {
+    // default behaviour
+    this.loadDependencies();
+    this.createLogger();
+    this.loadCustomDependencies();
+    this.loadConfig();
+
+    // Create database connection
+    this.dbConnection();
+    this.registerService();
+
+    this.config.setConfig("heartbeat", 10000)
+    this.config.setConfig("listenInterval", 20000)
+    this.heardBeat();
+    this.listenCommands();
+
+    this.logRequests();
+    this.loadMiddleware();
+    this.catchRoot();
+    this.loadRoutes();
+  }
+
+  start() {
+    this.logger.log("Starting server...");
+    setTimeout(() => {
+      this.server.listen(this.config.getConfig("port"), () => {
+        this.logger.success(`Server started on port ${this.config.getConfig("port")}`);
+      });
+    }, 10000);
+  }
+}
+
+const token = new Token("Token API");
+token.init();
+token.start();
+
+
+// listen for process termination
+process.on("SIGINT", () => {
+  token.gracefulShutdown();
 });
 
-service.listen(PORT || 3000, () => {
-  logger.log(`running on port ${PORT}`);
+process.on("SIGTERM", () => {
+  token.gracefulShutdown();
 });
