@@ -12,8 +12,7 @@ class Token extends ServiceManager {
     this.logger.log("Gracefully shutting down the service...");
     this.serviceSchema.findOne({ uuid: this.config.getConfig("uuid") }).then((service) => {
       if (!service) {
-        this.logger.warn("Service not found in database");
-        process.exit(1);
+        this.crashHandling("Service not found in database");
       }
 
       service.status = "await_removal";
@@ -22,12 +21,10 @@ class Token extends ServiceManager {
         this.logger.success("Service status updated to 'await_removal'");
         process.exit(0);
       }).catch((error) => {
-        this.logger.error(error);
-        process.exit(1);
+        this.crashHandling(error);
       });
     }).catch((error) => {
-      this.logger.error(error);
-      process.exit(1);
+      this.crashHandling(error);
     });
   }
 
@@ -72,8 +69,7 @@ class Token extends ServiceManager {
 
   loadRoutes() {
     if (!this.config.getConfig("route_path")) {
-      this.logger.error("Routes path not set")
-      process.exit(1);
+      this.crashHandling("Routes path not set");
     }
 
     const apiRoutes = this.getAllRoutes(this.config.getConfig("route_path"));
@@ -125,6 +121,7 @@ class Token extends ServiceManager {
     setTimeout(() => {
       this.server.listen(this.config.getConfig("port"), () => {
         this.logger.success(`Server started on port ${this.config.getConfig("port")}`);
+        this.setStatus("online");
       });
     }, 10000);
   }
